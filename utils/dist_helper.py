@@ -16,6 +16,10 @@ def setup_distributed(backend=None):
 
     num_gpus = torch.cuda.device_count()
 
+    # torch>=2.4 Windows builds lack libuv support for TCPStore
+    if os.name == "nt":
+        os.environ.setdefault("USE_LIBUV", "0")
+
     # allow plain "python train_xxx.py" single-process launches
     os.environ.setdefault("RANK", "0")
     os.environ.setdefault("WORLD_SIZE", "1")
@@ -28,10 +32,18 @@ def setup_distributed(backend=None):
 
     torch.cuda.set_device(rank % num_gpus)
 
-    dist.init_process_group(
-        backend=backend,
-        world_size=world_size,
-        rank=rank,
-    )
+    init_kwargs = dict(backend=backend, world_size=world_size, rank=rank)
+
+    if os.name == "nt":
+        # Windows TCPStore is broken in some torch builds; use a FileStore instead
+        import tempfile
+        if world_size == 1:
+            store_file = os.path.join(tempfile.gettempdir(), "realnet_dist_{}".format(os.getpid()))
+        else:
+            store_file = os.path.join(
+                tempfile.gettempdir(), "realnet_dist_{}".format(os.environ["MASTER_PORT"]))
+        init_kwargs["init_method"] = "file:///{}".format(store_file.replace("\\", "/"))
+
+    dist.init_process_group(**init_kwargs)
 
     return rank, world_size

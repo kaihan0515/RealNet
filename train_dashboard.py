@@ -218,14 +218,30 @@ def get_status(dataset, class_name):
         dataset = params["dataset"]
         class_name = params["class_name"]
 
-    loss_pts, tail, cur_epoch = parse_run_log(run_log)
+    # 沒有由介面啟動的訓練時,自動改看終端機訓練寫出的最新日誌
+    log_src = run_log
+    external_running = False
+    if not running:
+        ext_log = latest_file(os.path.join(
+            ROOT, "experiments", dataset, "realnet_log",
+            "realnet_{}_*.log".format(class_name)))
+        cands = [p for p in (run_log, ext_log) if p and os.path.exists(p)]
+        if cands:
+            log_src = max(cands, key=os.path.getmtime)
+        if log_src and os.path.exists(log_src):
+            external_running = time.time() - os.path.getmtime(log_src) < 60
+            if external_running and started is None:
+                started = os.path.getctime(log_src)
+
+    loss_pts, tail, cur_epoch = parse_run_log(log_src)
     history = read_history(dataset, class_name)
     summary = read_summary(dataset, class_name)
 
     return {
         "running": running,
+        "external_running": external_running,
         "exit_code": exit_code,
-        "elapsed": int(time.time() - started) if started and running else
+        "elapsed": int(time.time() - started) if started and (running or external_running) else
                    (int((os.path.getmtime(run_log) if run_log and os.path.exists(run_log) else started) - started) if started else None),
         "params": params,
         "dataset": dataset,
@@ -392,11 +408,12 @@ async function tick(){
   let s; try{s=await fetch('/api/status?dataset='+dsSel.value+'&class_name='+clsSel.value).then(r=>r.json());}catch(e){return;}
   const badge=document.getElementById('stBadge');
   if(s.running){badge.className='badge b-run';badge.textContent='訓練中';}
+  else if(s.external_running){badge.className='badge b-run';badge.textContent='訓練中(終端機)';}
   else if(s.summary && s.summary.early_stopped){badge.className='badge b-done';badge.textContent='已完成(早停)';}
   else if(s.exit_code===0){badge.className='badge b-done';badge.textContent='已完成';}
   else if(s.exit_code!=null){badge.className='badge b-err';badge.textContent='異常結束(code '+s.exit_code+')';}
   else{badge.className='badge b-idle';badge.textContent='待命';}
-  document.getElementById('btnStart').disabled=s.running;
+  document.getElementById('btnStart').disabled=s.running||s.external_running;
   document.getElementById('btnStop').disabled=!s.running;
 
   if(s.cur_epoch){const[e,me]=s.cur_epoch;

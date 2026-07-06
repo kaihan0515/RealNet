@@ -13,6 +13,13 @@ from glob import glob
 import os
 import cv2
 import torch
+
+# numpy>=1.24 removed these aliases but imgaug still references them
+for _name, _alias in (("bool", bool), ("int", int), ("float", float),
+                      ("complex", complex), ("object", object), ("str", str)):
+    if not hasattr(np, _name):
+        setattr(np, _name, _alias)
+
 import imgaug.augmenters as iaa
 import math
 from skimage import morphology
