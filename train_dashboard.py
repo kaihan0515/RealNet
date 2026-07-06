@@ -321,7 +321,7 @@ td{padding:3px 6px;border-bottom:1px solid var(--line);color:var(--sub)}td:last-
    <label>資料集</label><select id="dataset"></select>
    <label>類別</label><select id="class_name"></select>
    <div class="row2">
-    <div><label>Batch size</label><input id="batch_size" type="number" value="8"></div>
+    <div><label>Batch size</label><input id="batch_size" type="number" value="4"></div>
     <div><label>DataLoader workers</label><input id="workers" type="number" value="4"></div>
    </div>
    <div class="row2">
