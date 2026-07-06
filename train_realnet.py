@@ -113,7 +113,8 @@ def main():
         os.makedirs(config.checkpoints_path, exist_ok=True)
         os.makedirs(config.log_path, exist_ok=True)
 
-        current_time = get_current_time()
+        # ':' is illegal in Windows filenames (creates a hidden NTFS stream)
+        current_time = get_current_time().replace(":", "-").replace(" ", "_")
 
         logger = create_logger(
             "realnet_logger_{}".format(args.class_name), config.log_path + "/realnet_{}_{}.log".format(args.class_name,current_time)
