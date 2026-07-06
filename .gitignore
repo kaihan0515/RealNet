@@ -1,2 +1,7 @@
 __pycache__/
 *.pyc
+ui_runs/
+experiments/*/realnet_ui.yaml
+data/*/mvtec.zip*
+data/*/sdas.zip*
+*.zip
