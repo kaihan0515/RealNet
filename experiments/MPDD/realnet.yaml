@@ -93,6 +93,10 @@ trainer:
   max_epoch: 1000
   val_freq_epoch: 5
   print_freq_step: 20
+  early_stop:
+    enabled: True
+    patience: 10       # stop after 10 validation rounds (= 50 epochs) without improvement
+    min_delta: 0.0001  # minimum key-metric gain to count as an improvement
   optimizer:
     type: Adam
     kwargs:

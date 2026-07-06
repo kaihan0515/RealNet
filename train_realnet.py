@@ -1,5 +1,7 @@
 import warnings
 import argparse
+import csv
+import json
 import torch
 from datasets.data_builder import build_dataloader
 from easydict import EasyDict
@@ -163,7 +165,32 @@ def main():
     key_metric = config.evaluator["key_metric"]
 
     best_metric = 0
+    best_epoch = 0
     last_epoch = 0
+
+    # early stopping settings (patience is counted in validation rounds)
+    early_stop_cfg = config.trainer.get("early_stop", {})
+    early_stop_enabled = early_stop_cfg.get("enabled", True)
+    early_stop_patience = early_stop_cfg.get("patience", 10)
+    early_stop_min_delta = early_stop_cfg.get("min_delta", 0.0)
+    no_improve_rounds = 0
+    early_stopped = False
+
+    history_path = None
+    if rank == 0:
+        logger.info(
+            "early stopping: enabled={}, patience={} validation rounds "
+            "(={} epochs), min_delta={}".format(
+                early_stop_enabled,
+                early_stop_patience,
+                early_stop_patience * config.trainer.val_freq_epoch,
+                early_stop_min_delta,
+            )
+        )
+        history_path = os.path.join(
+            config.log_path,
+            "realnet_{}_{}_history.csv".format(args.class_name, current_time.replace(":", "-").replace(" ", "_")),
+        )
 
     criterion = build_criterion(config.criterion)
 
@@ -186,17 +213,44 @@ def main():
 
             ret_metrics = validate(config,val_loader, model, epoch+1,args.class_name)
 
+            stop_flag = torch.zeros(1, device="cuda")
+
             if rank==0:
                 ret_key_metric = np.mean([ret_metrics[key] for key in ret_metrics if key.find(key_metric)!=-1])
+
+                if ret_key_metric > best_metric + early_stop_min_delta:
+                    no_improve_rounds = 0
+                else:
+                    no_improve_rounds += 1
 
                 is_best = ret_key_metric >= best_metric
                 best_metric = max(ret_key_metric, best_metric)
 
                 if is_best:
+                    best_epoch = epoch + 1
                     best_record = {key.replace("mean",'best') :ret_metrics[key] for key in ret_metrics if key.find("mean")!=-1}
 
                 ret_metrics.update(best_record)
                 log_metrics(ret_metrics, config.evaluator.metrics, "realnet_logger_{}".format(args.class_name))
+                logger.info(
+                    "epoch {}: key_metric={:.5f}, best={:.5f} (epoch {}), "
+                    "no improvement for {}/{} validation rounds".format(
+                        epoch + 1, ret_key_metric, best_metric, best_epoch,
+                        no_improve_rounds, early_stop_patience,
+                    )
+                )
+
+                write_history(
+                    history_path,
+                    epoch + 1,
+                    ret_metrics,
+                    ret_key_metric,
+                    best_metric,
+                    best_epoch,
+                    is_best,
+                    no_improve_rounds,
+                )
+
                 if is_best:
                     save_checkpoint(
                         {
@@ -208,7 +262,69 @@ def main():
                         config,
                         args.class_name,
                     )
-            dist.barrier()
+
+                if early_stop_enabled and no_improve_rounds >= early_stop_patience:
+                    stop_flag += 1
+
+            dist.broadcast(stop_flag, src=0)
+
+            if stop_flag.item() > 0:
+                early_stopped = True
+                if rank == 0:
+                    logger.info(
+                        "early stopping triggered at epoch {}: no improvement over "
+                        "{} consecutive validation rounds ({} epochs). "
+                        "best {}={:.5f} at epoch {}".format(
+                            epoch + 1, early_stop_patience,
+                            early_stop_patience * config.trainer.val_freq_epoch,
+                            key_metric, best_metric, best_epoch,
+                        )
+                    )
+                break
+
+    if rank == 0:
+        summary = {
+            "class_name": args.class_name,
+            "dataset": args.dataset,
+            "key_metric": key_metric,
+            "best_metric": float(best_metric),
+            "best_epoch": best_epoch,
+            "stopped_epoch": epoch + 1,
+            "max_epoch": config.trainer.max_epoch,
+            "early_stopped": early_stopped,
+            "early_stop_patience": early_stop_patience,
+            "early_stop_min_delta": early_stop_min_delta,
+            "val_freq_epoch": config.trainer.val_freq_epoch,
+            "history_csv": history_path,
+            "best_checkpoint": os.path.join(config.checkpoints_path, args.class_name, "ckpt_best.pth.tar"),
+        }
+        summary_path = os.path.join(
+            config.log_path,
+            "realnet_{}_{}_summary.json".format(args.class_name, current_time.replace(":", "-").replace(" ", "_")),
+        )
+        with open(summary_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        logger.info("training summary saved to {}".format(summary_path))
+        logger.info("training finished: {}".format(json.dumps(summary)))
+
+
+def write_history(history_path, epoch, ret_metrics, key_metric_value,
+                  best_metric, best_epoch, is_best, no_improve_rounds):
+    row = {"epoch": epoch}
+    row.update({key: float(ret_metrics[key]) for key in sorted(ret_metrics.keys())})
+    row.update({
+        "key_metric": float(key_metric_value),
+        "best_metric": float(best_metric),
+        "best_epoch": best_epoch,
+        "is_best": int(is_best),
+        "no_improve_rounds": no_improve_rounds,
+    })
+    write_header = not os.path.exists(history_path)
+    with open(history_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
 
 
 def train_one_epoch(
