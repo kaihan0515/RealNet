@@ -91,6 +91,9 @@ def build_realnet_dataloader(cfg, training,distributed=True):
         num_workers=cfg["workers"],
         pin_memory=True,
         sampler=sampler,
+        # keep workers alive between epochs: on Windows each respawn re-imports
+        # heavy modules (~17s per worker) every epoch otherwise
+        persistent_workers=cfg["workers"] > 0,
     )
     return data_loader
 
